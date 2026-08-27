@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>Просмотр 3D · STL / STEP</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0a0e14">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<style>
+  :root{
+    --bg:#0a0e14;
+    --bg2:#0d1420;
+    --grid:#16212f;
+    --line:#223145;
+    --amber:#ffb454;
+    --cyan:#5ad4ff;
+    --text:#cdd8e3;
+    --dim:#5b6b7f;
+    --danger:#ff6b6b;
+    --ok:#6bffa0;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{
+    margin:0; padding:0; width:100%; height:100%;
+    background:var(--bg); color:var(--text);
+    font-family:'JetBrains Mono', monospace;
+    overflow:hidden; overscroll-behavior:none;
+  }
+  #app{position:fixed; inset:0; display:flex; flex-direction:column;}
+
+  /* ---------- top bar ---------- */
+  #topbar{
+    position:relative; z-index:5;
+    display:flex; align-items:center; gap:10px;
+    padding:calc(env(safe-area-inset-top,0px) + 12px) 14px 10px 14px;
+    background:linear-gradient(180deg, rgba(10,14,20,.95), rgba(10,14,20,0));
+    pointer-events:none;
+  }
+  #topbar .brand{
+    font-family:'Space Grotesk', sans-serif; font-weight:700; font-size:15px;
+    letter-spacing:.04em; color:var(--text); pointer-events:auto;
+  }
+  #topbar .brand span{color:var(--amber);}
+  #topbar .brand small{display:block; font-family:'JetBrains Mono',monospace; font-weight:400; font-size:9px; color:var(--dim); letter-spacing:.12em;}
+
+  /* ---------- viewport ---------- */
+  #viewport{position:relative; flex:1; min-height:0;}
+  canvas#gl{position:absolute; inset:0; width:100%; height:100%; display:block; touch-action:none;}
+
+  /* corner brackets, signature HUD element */
+  .bracket{position:absolute; width:22px; height:22px; border:2px solid var(--line); opacity:.9; pointer-events:none; z-index:4;}
+  .bracket.tl{top:64px; left:10px; border-right:none; border-bottom:none;}
+  .bracket.tr{top:64px; right:10px; border-left:none; border-bottom:none;}
+  .bracket.bl{bottom:10px; left:10px; border-right:none; border-top:none;}
+  .bracket.br{bottom:10px; right:10px; border-left:none; border-top:none;}
+
+  #dropHint{
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    flex-direction:column; gap:14px; text-align:center; padding:30px; z-index:3;
+  }
+  #dropHint .ring{
+    width:74px; height:74px; border-radius:50%; border:1.5px dashed var(--line);
+    display:flex; align-items:center; justify-content:center;
+  }
+  #dropHint .ring svg{width:30px; height:30px; stroke:var(--amber);}
+  #dropHint h1{font-family:'Space Grotesk',sans-serif; font-size:16px; font-weight:600; margin:0; color:var(--text);}
+  #dropHint p{font-size:11px; color:var(--dim); margin:0; line-height:1.6; max-width:260px;}
+  #dropHint .fmt{display:flex; gap:8px; margin-top:4px;}
+  #dropHint .fmt span{
+    font-size:9px; letter-spacing:.08em; padding:4px 8px; border:1px solid var(--line);
+    border-radius:3px; color:var(--cyan);
+  }
+
+  /* HUD stat readout, top-left under bar */
+  #hud{
+    position:absolute; top:64px; left:42px; z-index:4;
+    font-size:10px; line-height:1.7; color:var(--dim);
+    pointer-events:none; opacity:0; transition:opacity .3s;
+  }
+  #hud.show{opacity:1;}
+  #hud .row b{color:var(--cyan); font-weight:500;}
+  #hud .row{white-space:nowrap;}
+
+  /* status / loading */
+  #status{
+    position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+    z-index:6; display:none; flex-direction:column; align-items:center; gap:12px;
+    background:rgba(10,14,20,.9); padding:22px 26px; border:1px solid var(--line); border-radius:6px;
+  }
+  #status.show{display:flex;}
+  #status .spin{
+    width:26px; height:26px; border-radius:50%;
+    border:2px solid var(--line); border-top-color:var(--amber);
+    animation:spin .8s linear infinite;
+  }
+  @keyframes spin{to{transform:rotate(360deg);}}
+  #status .msg{font-size:11px; color:var(--text); text-align:center; max-width:220px;}
+  #status .msg.err{color:var(--danger);}
+
+  /* ---------- bottom toolbar ---------- */
+  #toolbar{
+    position:relative; z-index:5;
+    display:flex; align-items:center; gap:8px; overflow-x:auto;
+    padding:10px 12px calc(env(safe-area-inset-bottom,0px) + 12px) 12px;
+    background:linear-gradient(0deg, rgba(10,14,20,.97), rgba(10,14,20,.85));
+    border-top:1px solid var(--line);
+  }
+  #toolbar::-webkit-scrollbar{display:none;}
+  .btn{
+    flex:0 0 auto; display:flex; align-items:center; gap:6px;
+    background:var(--bg2); border:1px solid var(--line); color:var(--text);
+    font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:.03em;
+    padding:10px 12px; border-radius:5px; white-space:nowrap;
+  }
+  .btn svg{width:15px; height:15px; stroke:var(--dim); fill:none; flex:0 0 auto;}
+  .btn.active{border-color:var(--amber); color:var(--amber);}
+  .btn.active svg{stroke:var(--amber);}
+  .btn.primary{border-color:var(--amber); background:rgba(255,180,84,.08); color:var(--amber);}
+  .btn.primary svg{stroke:var(--amber);}
+  .btn:active{transform:scale(.96);}
+  #fileInput{display:none;}
+  .spacer{flex:1 0 8px; min-width:8px;}
+
+  /* ---------- section (cutaway) panel ---------- */
+  #sectionPanel{
+    position:absolute; left:10px; right:10px; bottom:10px; z-index:5;
+    background:rgba(13,20,32,.97); border:1px solid var(--line); border-radius:8px;
+    padding:14px 16px calc(env(safe-area-inset-bottom,0px) + 14px) 16px;
+    transform:translateY(120%); transition:transform .25s ease;
+  }
+  #sectionPanel.show{transform:translateY(0);}
+  #sectionPanel .hdr{
+    display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;
+  }
+  #sectionPanel .hdr .title{font-family:'Space Grotesk',sans-serif; font-size:12px; font-weight:600; color:var(--amber); letter-spacing:.05em;}
+  #sectionPanel .close{background:none; border:none; color:var(--dim); font-size:16px; padding:4px 8px;}
+  .axisRow{display:flex; gap:8px; margin-bottom:12px;}
+  .axisBtn{
+    flex:1; text-align:center; padding:8px 0; border:1px solid var(--line); border-radius:5px;
+    font-size:11px; letter-spacing:.05em; color:var(--dim); background:var(--bg2);
+  }
+  .axisBtn.active{border-color:var(--cyan); color:var(--cyan);}
+  .sliderRow{display:flex; align-items:center; gap:10px; margin-bottom:12px;}
+  .sliderRow input[type=range]{
+    flex:1; -webkit-appearance:none; height:3px; background:var(--line); border-radius:2px; outline:none;
+  }
+  .sliderRow input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none; width:18px; height:18px; border-radius:50%;
+    background:var(--amber); border:2px solid #0a0e14; margin-top:-1px;
+  }
+  .sectionActions{display:flex; gap:8px;}
+  .sectionActions .btn{flex:1; justify-content:center;}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <div id="topbar">
+    <div class="brand">MODEL<span>·</span>VIEW<small>STL // STEP LOCAL VIEWER</small></div>
+  </div>
+
+  <div id="viewport">
+    <canvas id="gl"></canvas>
+    <div class="bracket tl"></div>
+    <div class="bracket tr"></div>
+    <div class="bracket bl"></div>
+    <div class="bracket br"></div>
+
+    <div id="dropHint">
+      <div class="ring">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
+      </div>
+      <h1>Нет загруженной модели</h1>
+      <p>Откройте файл детали, чтобы осмотреть её со всех сторон. Вращение — одним пальцем, масштаб — щипком, сдвиг — двумя пальцами.</p>
+      <div class="fmt"><span>.STL</span><span>.STEP</span><span>.STP</span></div>
+    </div>
+
+    <div id="hud"></div>
+
+    <div id="status">
+      <div class="spin"></div>
+      <div class="msg" id="statusMsg">Загрузка…</div>
+    </div>
+
+    <div id="sectionPanel">
+      <div class="hdr">
+        <div class="title">РАЗРЕЗ МОДЕЛИ</div>
+        <button class="close" id="sectionClose">✕</button>
+      </div>
+      <div class="axisRow">
+        <button class="axisBtn active" data-axis="x">X</button>
+        <button class="axisBtn" data-axis="y">Y</button>
+        <button class="axisBtn" data-axis="z">Z</button>
+      </div>
+      <div class="sliderRow">
+        <input type="range" id="sectionSlider" min="-100" max="100" value="0" step="1">
+      </div>
+      <div class="sectionActions">
+        <button class="btn" id="sectionInvert">
+          <svg viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10l5-5 5 5"/><path d="M7 14l5 5 5-5"/></svg>
+          Другая сторона
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toolbar">
+    <label class="btn primary" for="fileInput">
+      <svg viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
+      Открыть файл
+    </label>
+    <input type="file" id="fileInput" accept=".stl,.step,.stp">
+
+    <button class="btn" id="btnReset" title="Сбросить вид">
+      <svg viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg>
+      Вид
+    </button>
+    <button class="btn" id="btnWire" title="Каркас">
+      <svg viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6l9-4 9 4-9 4-9-4z"/><path d="M3 6v12l9 4 9-4V6"/><path d="M3 6l9 4 9-4"/><path d="M12 10v10"/></svg>
+      Каркас
+    </button>
+    <button class="btn" id="btnRotate" title="Автовращение">
+      <svg viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v5h-5"/></svg>
+      Авто
+    </button>
+    <button class="btn" id="btnGrid" title="Сетка">
+      <svg viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="1"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg>
+      Сетка
+    </button>
+    <button class="btn" id="btnSection" title="Разрез">
+      <svg viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4l16 16"/><path d="M4 20L20 4" opacity="0"/><rect x="4" y="4" width="16" height="16" rx="1"/><path d="M4 12h16" stroke-dasharray="2 2"/></svg>
+      Разрез
+    </button>
+  </div>
+
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ============================================================
+     SCENE SETUP
+  ============================================================ */
+  const canvas = document.getElementById('gl');
+  const viewport = document.getElementById('viewport');
+  const renderer = new THREE.WebGLRenderer({canvas, antialias:true, alpha:false});
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setClearColor(0x0a0e14, 1);
+  renderer.localClippingEnabled = true;
+
+  const scene = new THREE.Scene();
+  scene.fog = new THREE.Fog(0x0a0e14, 400, 2200);
+
+  const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100000);
+
+  const hemi = new THREE.HemisphereLight(0x8fb8d9, 0x0a0e14, 0.55);
+  scene.add(hemi);
+  const key = new THREE.DirectionalLight(0xffffff, 0.9);
+  key.position.set(1, 1.4, 1);
+  scene.add(key);
+  const fill = new THREE.DirectionalLight(0x5ad4ff, 0.35);
+  fill.position.set(-1, -0.4, -1);
+  scene.add(fill);
+  const rim = new THREE.DirectionalLight(0xffb454, 0.3);
+  rim.position.set(-0.6, 0.8, -1);
+  scene.add(rim);
+
+  let gridGroup = new THREE.Group();
+  scene.add(gridGroup);
+  function buildGrid(size){
+    gridGroup.clear();
+    const grid = new THREE.GridHelper(size, 24, 0x223145, 0x16212f);
+    grid.material.transparent = true;
+    grid.material.opacity = 0.6;
+    gridGroup.add(grid);
+  }
+  buildGrid(200);
+  let gridVisible = true;
+
+  let mesh = null;
+  let wireVisible = false;
+  let autoRotate = false;
+
+  /* ---------- cross-section (cutaway) ---------- */
+  const sectionPlane = new THREE.Plane(new THREE.Vector3(1,0,0), 0);
+  const sectionState = { enabled:false, axis:'x', flip:false, halfExtent:{x:1,y:1,z:1} };
+  const AXIS_VEC = { x:new THREE.Vector3(1,0,0), y:new THREE.Vector3(0,1,0), z:new THREE.Vector3(0,0,1) };
+
+  const sectionIndicatorGeo = new THREE.PlaneGeometry(1,1);
+  const sectionIndicatorMat = new THREE.MeshBasicMaterial({color:0xffb454, transparent:true, opacity:0.12, side:THREE.DoubleSide, depthWrite:false});
+  const sectionIndicator = new THREE.Mesh(sectionIndicatorGeo, sectionIndicatorMat);
+  sectionIndicator.visible = false;
+  scene.add(sectionIndicator);
+
+  function updateSectionPlane(){
+    const axisVec = AXIS_VEC[sectionState.axis];
+    const sign = sectionState.flip ? -1 : 1;
+    const normal = axisVec.clone().multiplyScalar(sign);
+    const half = sectionState.halfExtent[sectionState.axis] || 1;
+    const posValue = (parseFloat(document.getElementById('sectionSlider').value) / 100) * half;
+    sectionPlane.normal.copy(normal);
+    sectionPlane.constant = -sign * posValue;
+
+    // visual indicator plane
+    const size = Math.max(sectionState.halfExtent.x, sectionState.halfExtent.y, sectionState.halfExtent.z) * 2.4 || 10;
+    sectionIndicator.scale.set(size, size, 1);
+    sectionIndicator.position.copy(axisVec.clone().multiplyScalar(posValue));
+    if(sectionState.axis === 'x') sectionIndicator.rotation.set(0, Math.PI/2, 0);
+    else if(sectionState.axis === 'y') sectionIndicator.rotation.set(Math.PI/2, 0, 0);
+    else sectionIndicator.rotation.set(0, 0, 0);
+  }
+
+  function applySectionToMaterials(){
+    if(!mesh) return;
+    const planes = sectionState.enabled ? [sectionPlane] : [];
+    mesh.traverse(o=>{
+      if(o.material){
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        mats.forEach(mm=>{ mm.clippingPlanes = planes; mm.clipShadows = true; mm.needsUpdate = true; });
+      }
+    });
+    sectionIndicator.visible = sectionState.enabled;
+  }
+
+  /* ============================================================
+     CUSTOM TOUCH / MOUSE ORBIT CONTROLS (no external deps)
+  ============================================================ */
+  const controls = {
+    target: new THREE.Vector3(0,0,0),
+    radius: 300,
+    minRadius: 0.5,
+    maxRadius: 20000,
+    theta: Math.PI * 0.28,   // azimuth
+    phi: Math.PI * 0.38,     // polar
+    rotSpeed: 0.008,
+    panSpeed: 0.0018,
+  };
+  function clampPhi(p){ return Math.max(0.04, Math.min(Math.PI - 0.04, p)); }
+  function applyControls(){
+    const r = controls.radius;
+    const p = controls.phi, t = controls.theta;
+    camera.position.set(
+      controls.target.x + r * Math.sin(p) * Math.sin(t),
+      controls.target.y + r * Math.cos(p),
+      controls.target.z + r * Math.sin(p) * Math.cos(t)
+    );
+    camera.lookAt(controls.target);
+  }
+  applyControls();
+
+  const pointers = new Map(); // id -> {x,y}
+  let lastPinchDist = null;
+  let lastMid = null;
+  let mode = null; // 'rotate' | 'pinch'
+
+  function getMid(){
+    const pts = [...pointers.values()];
+    return {x:(pts[0].x+pts[1].x)/2, y:(pts[0].y+pts[1].y)/2};
+  }
+  function getDist(){
+    const pts = [...pointers.values()];
+    return Math.hypot(pts[0].x-pts[1].x, pts[0].y-pts[1].y);
+  }
+
+  canvas.addEventListener('pointerdown', (e)=>{
+    canvas.setPointerCapture(e.pointerId);
+    pointers.set(e.pointerId, {x:e.clientX, y:e.clientY});
+    if(pointers.size === 1){ mode = 'rotate'; }
+    else if(pointers.size === 2){ mode = 'pinch'; lastPinchDist = getDist(); lastMid = getMid(); }
+  });
+  canvas.addEventListener('pointermove', (e)=>{
+    if(!pointers.has(e.pointerId)) return;
+    const prev = pointers.get(e.pointerId);
+    const dx = e.clientX - prev.x, dy = e.clientY - prev.y;
+    pointers.set(e.pointerId, {x:e.clientX, y:e.clientY});
+
+    if(mode === 'rotate' && pointers.size === 1){
+      controls.theta -= dx * controls.rotSpeed;
+      controls.phi = clampPhi(controls.phi - dy * controls.rotSpeed);
+      applyControls();
+    } else if(mode === 'pinch' && pointers.size === 2){
+      const dist = getDist();
+      const mid = getMid();
+      if(lastPinchDist){
+        const scale = lastPinchDist / dist;
+        controls.radius = Math.max(controls.minRadius, Math.min(controls.maxRadius, controls.radius * scale));
+      }
+      if(lastMid){
+        const mdx = mid.x - lastMid.x, mdy = mid.y - lastMid.y;
+        panCamera(-mdx, mdy);
+      }
+      lastPinchDist = dist; lastMid = mid;
+      applyControls();
+    }
+  });
+  function endPointer(e){
+    pointers.delete(e.pointerId);
+    if(pointers.size === 1){ mode = 'rotate'; lastPinchDist = null; lastMid = null; }
+    else if(pointers.size === 0){ mode = null; }
+    else { lastPinchDist = getDist(); lastMid = getMid(); }
+  }
+  canvas.addEventListener('pointerup', endPointer);
+  canvas.addEventListener('pointercancel', endPointer);
+  canvas.addEventListener('pointerleave', (e)=>{ if(e.buttons===0) endPointer(e); });
+
+  function panCamera(dx, dy){
+    const scale = controls.radius * controls.panSpeed;
+    const right = new THREE.Vector3();
+    const up = new THREE.Vector3(0,1,0);
+    camera.getWorldDirection(right);
+    right.cross(up).normalize();
+    const camUp = new THREE.Vector3().crossVectors(right, camera.getWorldDirection(new THREE.Vector3())).normalize();
+    controls.target.addScaledVector(right, -dx * scale);
+    controls.target.addScaledVector(camUp, dy * scale);
+  }
+
+  // desktop wheel zoom + right-drag pan
+  canvas.addEventListener('wheel', (e)=>{
+    e.preventDefault();
+    const scale = Math.exp(e.deltaY * 0.001);
+    controls.radius = Math.max(controls.minRadius, Math.min(controls.maxRadius, controls.radius * scale));
+    applyControls();
+  }, {passive:false});
+
+  let mouseRightDown = false;
+  canvas.addEventListener('contextmenu', (e)=> e.preventDefault());
+  canvas.addEventListener('pointerdown', (e)=>{ if(e.button === 2) mouseRightDown = true; });
+  window.addEventListener('pointerup', ()=> mouseRightDown = false);
+  canvas.addEventListener('pointermove', (e)=>{
+    if(mouseRightDown && pointers.size <= 1){
+      panCamera(-e.movementX, e.movementY);
+      applyControls();
+    }
+  });
+
+  /* ============================================================
+     RESIZE
+  ============================================================ */
+  function resize(){
+    const w = viewport.clientWidth, h = viewport.clientHeight;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / Math.max(h,1);
+    camera.updateProjectionMatrix();
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  /* ============================================================
+     RENDER LOOP
+  ============================================================ */
+  function animate(){
+    requestAnimationFrame(animate);
+    if(autoRotate){
+      controls.theta += 0.0035;
+      applyControls();
+    }
+    renderer.render(scene, camera);
+  }
+  animate();
+
+  /* ============================================================
+     STL PARSER (binary + ascii) — no external loader needed
+  ============================================================ */
+  function parseSTL(arrayBuffer){
+    const dv = new DataView(arrayBuffer);
+    const isBinary = (()=>{
+      if(arrayBuffer.byteLength < 84) return false;
+      const count = dv.getUint32(80, true);
+      const expected = 80 + 4 + count * 50;
+      return expected === arrayBuffer.byteLength;
+    })();
+
+    if(isBinary){
+      const count = dv.getUint32(80, true);
+      const positions = new Float32Array(count * 9);
+      const normals = new Float32Array(count * 9);
+      let offset = 84;
+      for(let i=0; i<count; i++){
+        const nx = dv.getFloat32(offset, true), ny = dv.getFloat32(offset+4, true), nz = dv.getFloat32(offset+8, true);
+        offset += 12;
+        for(let v=0; v<3; v++){
+          const idx = i*9 + v*3;
+          positions[idx]   = dv.getFloat32(offset, true);
+          positions[idx+1] = dv.getFloat32(offset+4, true);
+          positions[idx+2] = dv.getFloat32(offset+8, true);
+          normals[idx] = nx; normals[idx+1] = ny; normals[idx+2] = nz;
+          offset += 12;
+        }
+        offset += 2; // attribute byte count
+      }
+      return {positions, normals, triangleCount: count};
+    } else {
+      const text = new TextDecoder().decode(arrayBuffer);
+      const vertRe = /vertex\s+([\-\d.eE+]+)\s+([\-\d.eE+]+)\s+([\-\d.eE+]+)/g;
+      const normRe = /facet\s+normal\s+([\-\d.eE+]+)\s+([\-\d.eE+]+)\s+([\-\d.eE+]+)/g;
+      const verts = [];
+      let m;
+      while((m = vertRe.exec(text)) !== null){
+        verts.push(parseFloat(m[1]), parseFloat(m[2]), parseFloat(m[3]));
+      }
+      const norms = [];
+      while((m = normRe.exec(text)) !== null){
+        norms.push(parseFloat(m[1]), parseFloat(m[2]), parseFloat(m[3]));
+      }
+      const triangleCount = verts.length / 9;
+      const positions = new Float32Array(verts);
+      const normals = new Float32Array(triangleCount * 9);
+      for(let i=0; i<triangleCount; i++){
+        const nx = norms[i*3] || 0, ny = norms[i*3+1] || 0, nz = norms[i*3+2] || 0;
+        for(let v=0; v<3; v++){
+          const idx = i*9 + v*3;
+          normals[idx] = nx; normals[idx+1] = ny; normals[idx+2] = nz;
+        }
+      }
+      return {positions, normals, triangleCount};
+    }
+  }
+
+  /* ============================================================
+     STEP LOADER — lazy-loads occt-import-js (WASM/OpenCascade)
+     only when a .step/.stp file is opened
+  ============================================================ */
+  let occtPromise = null;
+  function loadOcct(){
+    if(occtPromise) return occtPromise;
+    occtPromise = new Promise((resolve, reject)=>{
+      const CDN = 'https://cdn.jsdelivr.net/npm/occt-import-js@0.0.23/dist/';
+      const script = document.createElement('script');
+      script.src = CDN + 'occt-import-js.js';
+      script.onload = async ()=>{
+        try{
+          if(typeof occtimportjs !== 'function') throw new Error('module not found');
+          const occt = await occtimportjs({ locateFile: (p)=> CDN + p });
+          resolve(occt);
+        } catch(err){ reject(err); }
+      };
+      script.onerror = ()=> reject(new Error('network'));
+      document.head.appendChild(script);
+    });
+    return occtPromise;
+  }
+
+  function stepResultToGeometry(result){
+    // occt-import-js returns { success, meshes: [{ attributes:{position:{array}}, normal? , index:{array} }] }
+    const group = new THREE.Group();
+    result.meshes.forEach((m)=>{
+      const geo = new THREE.BufferGeometry();
+      const posArr = m.attributes.position.array;
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(posArr), 3));
+      if(m.attributes.normal && m.attributes.normal.array){
+        geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(m.attributes.normal.array), 3));
+      }
+      if(m.index && m.index.array){
+        geo.setIndex(new THREE.BufferAttribute(new Uint32Array(m.index.array), 1));
+      }
+      if(!geo.getAttribute('normal')) geo.computeVertexNormals();
+      const color = m.color ? new THREE.Color(m.color[0], m.color[1], m.color[2]) : new THREE.Color(0xaebfce);
+      const mat = new THREE.MeshStandardMaterial({color, metalness:0.15, roughness:0.55, flatShading:false, side:THREE.DoubleSide});
+      const meshObj = new THREE.Mesh(geo, mat);
+      group.add(meshObj);
+    });
+    let triCount = 0;
+    result.meshes.forEach(m=>{ triCount += (m.index ? m.index.array.length : m.attributes.position.array.length/3) / 3; });
+    return {object: group, triangleCount: Math.round(triCount)};
+  }
+
+  /* ============================================================
+     MODEL LOADING / DISPLAY
+  ============================================================ */
+  const dropHint = document.getElementById('dropHint');
+  const hud = document.getElementById('hud');
+  const statusEl = document.getElementById('status');
+  const statusMsg = document.getElementById('statusMsg');
+
+  function showStatus(text, isError){
+    statusEl.classList.add('show');
+    statusMsg.textContent = text;
+    statusMsg.classList.toggle('err', !!isError);
+  }
+  function hideStatus(){ statusEl.classList.remove('show'); }
+
+  function clearModel(){
+    if(mesh){
+      scene.remove(mesh);
+      mesh.traverse(o=>{
+        if(o.geometry) o.geometry.dispose();
+        if(o.material){ if(Array.isArray(o.material)) o.material.forEach(mm=>mm.dispose()); else o.material.dispose(); }
+      });
+      mesh = null;
+    }
+    sectionIndicator.visible = false;
+  }
+
+  function frameObject(object, boundingBox){
+    const size = new THREE.Vector3();
+    const center = new THREE.Vector3();
+    boundingBox.getSize(size);
+    boundingBox.getCenter(center);
+    object.position.sub(center);
+
+    const maxDim = Math.max(size.x, size.y, size.z) || 1;
+    controls.target.set(0,0,0);
+    controls.radius = maxDim * 1.8;
+    controls.minRadius = maxDim * 0.02;
+    controls.maxRadius = maxDim * 40;
+    controls.theta = Math.PI * 0.28;
+    controls.phi = Math.PI * 0.38;
+    camera.near = maxDim * 0.001;
+    camera.far = maxDim * 100;
+    camera.updateProjectionMatrix();
+    applyControls();
+
+    buildGrid(maxDim * 3);
+    gridGroup.position.y = -size.y/2;
+    gridGroup.visible = gridVisible;
+
+    sectionState.halfExtent = { x:size.x/2 || 1, y:size.y/2 || 1, z:size.z/2 || 1 };
+    document.getElementById('sectionSlider').value = 0;
+    updateSectionPlane();
+
+    return {size};
+  }
+
+  function setWireframe(on){
+    wireVisible = on;
+    if(!mesh) return;
+    mesh.traverse(o=>{
+      if(o.material){
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        mats.forEach(mm=> mm.wireframe = on);
+      }
+    });
+    document.getElementById('btnWire').classList.toggle('active', on);
+  }
+
+  function displayModel(object, triangleCount, fileName, sizeInfo){
+    dropHint.style.display = 'none';
+    mesh = object;
+    scene.add(mesh);
+    setWireframe(wireVisible);
+    applySectionToMaterials();
+    hud.classList.add('show');
+    const s = sizeInfo.size;
+    hud.innerHTML =
+      '<div class="row">ФАЙЛ &nbsp;<b>' + escapeHtml(fileName) + '</b></div>' +
+      '<div class="row">ГРАНИ &nbsp;<b>' + triangleCount.toLocaleString('ru-RU') + '</b></div>' +
+      '<div class="row">X&nbsp;' + s.x.toFixed(1) + ' &nbsp;Y&nbsp;' + s.y.toFixed(1) + ' &nbsp;Z&nbsp;' + s.z.toFixed(1) + '</div>';
+  }
+
+  function escapeHtml(str){
+    const d = document.createElement('div');
+    d.textContent = str;
+    return d.innerHTML;
+  }
+
+  async function handleFile(file){
+    clearModel();
+    hud.classList.remove('show');
+    const name = file.name;
+    const ext = name.split('.').pop().toLowerCase();
+
+    if(ext === 'stl'){
+      showStatus('Разбор STL…');
+      try{
+        const buf = await file.arrayBuffer();
+        const {positions, normals, triangleCount} = parseSTL(buf);
+        if(triangleCount === 0) throw new Error('Не найдено ни одного треугольника — файл повреждён или пуст.');
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geo.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+        const mat = new THREE.MeshStandardMaterial({color:0xaebfce, metalness:0.15, roughness:0.55, flatShading:true, side:THREE.DoubleSide, wireframe: wireVisible});
+        const obj = new THREE.Mesh(geo, mat);
+        geo.computeBoundingBox();
+        const info = frameObject(obj, geo.boundingBox);
+        displayModel(obj, triangleCount, name, info);
+        hideStatus();
+      } catch(err){
+        showStatus('Ошибка чтения STL: ' + err.message, true);
+        setTimeout(hideStatus, 3500);
+      }
+
+    } else if(ext === 'step' || ext === 'stp'){
+      showStatus('Загрузка модуля STEP (OpenCascade, WASM)…\nПри первом запуске это может занять время.');
+      try{
+        const occt = await loadOcct();
+        showStatus('Разбор STEP-геометрии…');
+        const buf = await file.arrayBuffer();
+        const result = occt.ReadStepFile(new Uint8Array(buf), null);
+        if(!result.success || !result.meshes || !result.meshes.length){
+          throw new Error('Не удалось распознать геометрию в файле.');
+        }
+        const {object, triangleCount} = stepResultToGeometry(result);
+        const box = new THREE.Box3().setFromObject(object);
+        const info = frameObject(object, box);
+        displayModel(object, triangleCount, name, info);
+        hideStatus();
+      } catch(err){
+        showStatus('Не удалось загрузить STEP-модуль (нет сети или CDN заблокирован). Экспортируйте модель в .STL и откройте её здесь.', true);
+        setTimeout(hideStatus, 6000);
+      }
+    } else {
+      showStatus('Формат не поддерживается. Используйте .stl, .step или .stp', true);
+      setTimeout(hideStatus, 3000);
+    }
+  }
+
+  /* ============================================================
+     UI WIRING
+  ============================================================ */
+  document.getElementById('fileInput').addEventListener('change', (e)=>{
+    if(e.target.files && e.target.files[0]) handleFile(e.target.files[0]);
+    e.target.value = '';
+  });
+
+  ['dragover','drop'].forEach(evt=>{
+    viewport.addEventListener(evt, (e)=> e.preventDefault());
+  });
+  viewport.addEventListener('drop', (e)=>{
+    e.preventDefault();
+    if(e.dataTransfer.files && e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+  });
+
+  document.getElementById('btnReset').addEventListener('click', ()=>{
+    if(!mesh) return;
+    const box = new THREE.Box3().setFromObject(mesh);
+    frameObject(mesh, box);
+  });
+  document.getElementById('btnWire').addEventListener('click', ()=> setWireframe(!wireVisible));
+  document.getElementById('btnRotate').addEventListener('click', (e)=>{
+    autoRotate = !autoRotate;
+    e.currentTarget.classList.toggle('active', autoRotate);
+  });
+  document.getElementById('btnGrid').addEventListener('click', (e)=>{
+    gridVisible = !gridVisible;
+    gridGroup.visible = gridVisible;
+    e.currentTarget.classList.toggle('active', gridVisible);
+  });
+
+  const sectionPanel = document.getElementById('sectionPanel');
+  const btnSection = document.getElementById('btnSection');
+  function openSectionPanel(){
+    if(!mesh){
+      showStatus('Сначала откройте модель', true);
+      setTimeout(hideStatus, 1800);
+      return;
+    }
+    sectionState.enabled = true;
+    applySectionToMaterials();
+    updateSectionPlane();
+    sectionPanel.classList.add('show');
+    btnSection.classList.add('active');
+  }
+  function closeSectionPanel(){
+    sectionState.enabled = false;
+    applySectionToMaterials();
+    sectionPanel.classList.remove('show');
+    btnSection.classList.remove('active');
+  }
+  btnSection.addEventListener('click', ()=>{
+    if(sectionPanel.classList.contains('show')) closeSectionPanel();
+    else openSectionPanel();
+  });
+  document.getElementById('sectionClose').addEventListener('click', closeSectionPanel);
+
+  document.querySelectorAll('.axisBtn').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      document.querySelectorAll('.axisBtn').forEach(x=>x.classList.remove('active'));
+      b.classList.add('active');
+      sectionState.axis = b.dataset.axis;
+      document.getElementById('sectionSlider').value = 0;
+      updateSectionPlane();
+    });
+  });
+
+  document.getElementById('sectionSlider').addEventListener('input', updateSectionPlane);
+
+  document.getElementById('sectionInvert').addEventListener('click', ()=>{
+    sectionState.flip = !sectionState.flip;
+    updateSectionPlane();
+  });
+
+  if("serviceWorker" in navigator){
+    window.addEventListener("load", ()=>{
+      navigator.serviceWorker.register("sw.js").catch(()=>{});
+    });
+  }
+})();
+</script>
+</body>
+</html>
